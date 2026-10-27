@@ -509,7 +509,7 @@ function Invoke-SetupFill {
     Write-Host '  In Valorant: Settings > Video > General' -ForegroundColor White
     Write-Host '    1. Display Mode = Fullscreen'
     Write-Host "    2. Resolution   = ${Width}x${Height} (any 4:3 one works)   -> Apply"
-    Write-Host '    3. Aspect Ratio Method = Fill                             -> Apply'
+    Write-Host '    3. Click Letterbox -> Apply, then Fill -> Apply   (Fill sticks this way)'
     Write-Host '    4. Display Mode = Windowed Fullscreen                     -> Apply'
     Write-Host '    5. Close the game.'
     Write-Host ''
@@ -667,12 +667,12 @@ $LastResFile = Join-Path $StateDir 'last-resolution.txt'
 
 function Read-Resolution {
     # Default = last resolution you used, otherwise 1280x960.
-    $def = '1280x960'
+    $def = '1280x882'
     if (Test-Path $LastResFile) {
         $saved = (Get-Content $LastResFile -Raw).Trim()
         if ($saved -match '^\d+x\d+$') { $def = $saved }
     }
-    $presets = @('1280x960', '1440x1080', '1024x768', '1280x1024', '1680x1050', '1600x900')
+    $presets = @('1280x882', '1440x993', '1568x1080', '1280x960', '1440x1080', '1024x768')
     $mons    = [VSDisplay4]::Displays()
     $sizes   = @($mons | ForEach-Object { $c = [VSDisplay4]::Current($_); "$($c[2])x$($c[3])@$($c[4])Hz" })
     $maxW    = ($mons | ForEach-Object { ([VSDisplay4]::Current($_))[2] } | Measure-Object -Maximum).Maximum
@@ -697,6 +697,15 @@ function Read-Resolution {
             $w = [int]$Matches[1]; $h = [int]$Matches[2]
             if ($w -lt 640 -or $h -lt 480) { Write-Bad 'Too small - minimum is 640x480.'; continue }
             if ($w -gt $maxW -or $h -gt $maxH) { Write-Bad "Bigger than your monitor (${maxW}x${maxH}) - nothing to stretch."; continue }
+            # Valorant adds its own bars top + bottom when width/height is under ~1.45
+            # (4:3 is 1.33). The "true stretched" resolutions everyone uses now sit at 1.45.
+            if (($w / $h) -lt 1.44) {
+                $h2 = [math]::Floor($w / 1.45)
+                Write-Warn2 "Valorant puts black bars top + bottom on ${w}x${h} (ratio under 1.45)."
+                Write-Warn2 "The no-bars version of it is ${w}x${h2}."
+                $ans = (Read-Host "  Use ${w}x${h2} instead? [Y/n]").Trim().ToLower()
+                if ($ans -ne 'n') { $h = $h2 }
+            }
             New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
             Set-Content -Path $LastResFile -Value "${w}x${h}"
             return @($w, $h)
@@ -733,7 +742,8 @@ if (-not $Revert -and -not $SetupFill) {
     Write-Host "  Using ${Width}x${Height}" -ForegroundColor Magenta
     if (-not (@([VSDisplay4]::Displays() | Where-Object { [VSDisplay4]::MaxHz($_, $Width, $Height) -gt 0 }))) {
         Write-Warn2 "${Width}x${Height} isn't in your monitor's list - add it as a custom resolution first:"
-        Write-Warn2 '  NVIDIA Control Panel > Change resolution > Customize > Create Custom Resolution'
+        Write-Warn2 '  NVIDIA Control Panel > Change resolution > Customize > tick "Enable resolutions not exposed by the display"'
+        Write-Warn2 "  > Create Custom Resolution > ${Width} x ${Height} at your max Hz > Test > Apply" 
         Write-Warn2 '  AMD Software > Gaming/Display > Custom Resolutions'
     }
 }

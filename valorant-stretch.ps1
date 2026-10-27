@@ -64,12 +64,12 @@ if (-not $isAdmin) {
 }
 
 # ------------------------------------------------------- display (Win32) ----
-if (-not ('VSDisplay3' -as [type])) {
+if (-not ('VSDisplay4' -as [type])) {
 Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-public static class VSDisplay3 {
+public static class VSDisplay4 {
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct DEVMODE {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
@@ -113,6 +113,34 @@ public static class VSDisplay3 {
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+
+    [StructLayout(LayoutKind.Sequential)] public struct LUID { public uint Low; public int High; }
+    [StructLayout(LayoutKind.Sequential)] public struct PATH_SOURCE { public LUID adapterId; public uint id; public uint modeInfoIdx; public uint statusFlags; }
+    [StructLayout(LayoutKind.Sequential)] public struct PATH_TARGET {
+        public LUID adapterId; public uint id; public uint modeInfoIdx; public uint outputTechnology; public uint rotation;
+        public uint scaling; public uint refreshNum; public uint refreshDen; public uint scanLineOrdering; public int targetAvailable; public uint statusFlags;
+    }
+    [StructLayout(LayoutKind.Sequential)] public struct PATH_INFO { public PATH_SOURCE sourceInfo; public PATH_TARGET targetInfo; public uint flags; }
+    [StructLayout(LayoutKind.Sequential)] public struct MODE_INFO { public uint infoType; public uint id; public LUID adapterId; public ulong u0, u1, u2, u3, u4, u5; }
+    [DllImport("user32.dll")] static extern int GetDisplayConfigBufferSizes(uint flags, out uint np, out uint nm);
+    [DllImport("user32.dll")] static extern int QueryDisplayConfig(uint flags, ref uint np, [Out] PATH_INFO[] p, ref uint nm, [Out] MODE_INFO[] m, IntPtr topo);
+    [DllImport("user32.dll")] static extern int SetDisplayConfig(uint np, [In] PATH_INFO[] p, uint nm, [In] MODE_INFO[] m, uint flags);
+
+    // Tell Windows/the GPU to scale every active screen as STRETCHED (fill, no bars) right now.
+    // Not saved, so your normal setup comes back when the resolution is restored.
+    // Returns 0 = already stretched or applied, otherwise a Win32 error code.
+    public static int ForceStretchScaling() {
+        uint np, nm;
+        int r = GetDisplayConfigBufferSizes(2, out np, out nm); // QDC_ONLY_ACTIVE_PATHS
+        if (r != 0) return r;
+        PATH_INFO[] p = new PATH_INFO[np]; MODE_INFO[] m = new MODE_INFO[nm];
+        r = QueryDisplayConfig(2, ref np, p, ref nm, m, IntPtr.Zero);
+        if (r != 0) return r;
+        bool need = false;
+        for (int i = 0; i < np; i++) if (p[i].targetInfo.scaling != 3) { p[i].targetInfo.scaling = 3; need = true; }
+        if (!need) return 0;
+        return SetDisplayConfig(np, p, nm, m, 0x80 | 0x20 | 0x400); // APPLY | USE_SUPPLIED | ALLOW_CHANGES
+    }
 
     static DEVMODE New() { DEVMODE d = new DEVMODE(); d.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE)); return d; }
 
@@ -194,7 +222,7 @@ public static class VSDisplay3 {
 }
 '@
 }
-[VSDisplay3]::DpiAware()
+[VSDisplay4]::DpiAware()
 
 # -------------------------------------------------------------- helpers ----
 function Stop-Riot {
@@ -314,8 +342,8 @@ function Invoke-Apply {
 
     Set-GpuStretch
 
-    foreach ($d in [VSDisplay3]::Displays()) {
-        $hz = [VSDisplay3]::MaxHz($d, $Width, $Height)
+    foreach ($d in [VSDisplay4]::Displays()) {
+        $hz = [VSDisplay4]::MaxHz($d, $Width, $Height)
         if ($hz -gt 0) { Write-Ok "$($d.TrimStart('\.')): ${Width}x${Height} available up to ${hz}Hz." }
     }
     return $true
@@ -374,7 +402,7 @@ function Enable-MonitorDrivers {
     }
     Remove-Item $MonStateFile -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 3
-    foreach ($d in [VSDisplay3]::Displays()) { [void][VSDisplay3]::Restore($d) }
+    foreach ($d in [VSDisplay4]::Displays()) { [void][VSDisplay4]::Restore($d) }
     Write-Ok "Monitor driver(s) re-enabled in Device Manager."
 }
 
@@ -396,7 +424,7 @@ function Invoke-Launch {
         $game = $null
         while ((Get-Date) -lt $deadline) {
             $game = Get-Process -Name 'VALORANT-Win64-Shipping' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($game -and [VSDisplay3]::GameWindow() -ne [IntPtr]::Zero) { break }
+            if ($game -and [VSDisplay4]::GameWindow() -ne [IntPtr]::Zero) { break }
             Start-Sleep -Seconds 2
         }
         if (-not $game) { Write-Warn2 'Valorant did not start in time.'; return }
@@ -407,38 +435,39 @@ function Invoke-Launch {
 
         # Watchdog: follow whichever monitor the game is on, keep that monitor at
         # WxH stretched at its highest refresh rate, and keep the window covering it.
-        $activeDev = $null; $hz = 0
+        $activeDev = $null; $hz = 0; $scWarned = $false; $needScale = $true
         $resets = New-Object System.Collections.Generic.Queue[datetime]
         $forceDesktop = $true
         while (-not $game.HasExited) {
-            $win = [VSDisplay3]::GameWindow()
-            $dev = [VSDisplay3]::WindowDisplay($win)
-            if (-not $dev) { $dev = ([VSDisplay3]::Displays())[0] }
+            $win = [VSDisplay4]::GameWindow()
+            $dev = [VSDisplay4]::WindowDisplay($win)
+            if (-not $dev) { $dev = ([VSDisplay4]::Displays())[0] }
 
             # Switch monitors only if the game really moved (not just mid-resize).
             if ($dev -ne $activeDev) {
                 $stay = $false
                 if ($activeDev) {
-                    $a = [VSDisplay3]::Current($activeDev)
-                    $stay = [VSDisplay3]::WindowAt($win, $a[0], $a[1], $a[2], $a[3])
+                    $a = [VSDisplay4]::Current($activeDev)
+                    $stay = [VSDisplay4]::WindowAt($win, $a[0], $a[1], $a[2], $a[3])
                 }
                 if (-not $stay) {
                     if ($activeDev -and $changedDevs.Contains($activeDev)) {
-                        [void][VSDisplay3]::Restore($activeDev); [void]$changedDevs.Remove($activeDev)
+                        [void][VSDisplay4]::Restore($activeDev); [void]$changedDevs.Remove($activeDev)
                     }
                     $activeDev = $dev
-                    $hz = [VSDisplay3]::MaxHz($dev, $Width, $Height)
+                    $hz = [VSDisplay4]::MaxHz($dev, $Width, $Height)
                     $resets.Clear(); $forceDesktop = $true
                     $hzText = if ($hz -gt 0) { "${hz}Hz (max for this monitor)" } else { 'default Hz (mode not listed)' }
                     Write-Ok "Game is on $($dev.TrimStart('\.')) -> ${Width}x${Height} @ $hzText"
                 }
             }
 
-            $cur = [VSDisplay3]::Current($activeDev)
+            $cur = [VSDisplay4]::Current($activeDev)
             if ($forceDesktop -and ($cur[2] -ne $Width -or $cur[3] -ne $Height -or ($hz -gt 0 -and $cur[4] -ne $hz))) {
-                $r = [VSDisplay3]::SetStretched($activeDev, $Width, $Height, $hz)
+                $r = [VSDisplay4]::SetStretched($activeDev, $Width, $Height, $hz)
                 if ($r -eq 0) {
                     if (-not $changedDevs.Contains($activeDev)) { $changedDevs.Add($activeDev) }
+                    $needScale = $true
                     $now = Get-Date
                     $resets.Enqueue($now)
                     while ($resets.Count -gt 0 -and ($now - $resets.Peek()).TotalSeconds -gt 60) { [void]$resets.Dequeue() }
@@ -451,15 +480,21 @@ function Invoke-Launch {
                     $forceDesktop = $false
                     Write-Bad "Windows refused ${Width}x${Height} on this monitor (code $r). Add it as a custom resolution in your GPU panel (see README)."
                 }
-                $cur = [VSDisplay3]::Current($activeDev)
+                $cur = [VSDisplay4]::Current($activeDev)
             }
-            [void][VSDisplay3]::FitWindow($win, $cur[0], $cur[1], $cur[2], $cur[3])
+            # Force GPU stretch scaling once after each resolution change (not every loop - avoids flicker).
+            if ($needScale) {
+                $needScale = $false
+                $sc = [VSDisplay4]::ForceStretchScaling()
+            } else { $sc = 0 }
+            if ($sc -ne 0 -and -not $scWarned) { Write-Warn2 "Windows didn't accept stretch scaling (code $sc) - set Full-screen + Override in NVIDIA Control Panel."; $scWarned = $true }
+            [void][VSDisplay4]::FitWindow($win, $cur[0], $cur[1], $cur[2], $cur[3])
             Start-Sleep -Milliseconds 1500
         }
         Write-Step 'Valorant closed.'
     }
     finally {
-        foreach ($d in $changedDevs) { [void][VSDisplay3]::Restore($d) }
+        foreach ($d in $changedDevs) { [void][VSDisplay4]::Restore($d) }
         if ($changedDevs.Count -gt 0) { Write-Ok 'Monitor resolution restored.' }
         if (-not $KeepMonitorDriver) { Enable-MonitorDrivers }
     }
@@ -492,7 +527,7 @@ function Invoke-Revert {
         Write-Warn2 'No scaling backup found - display scaling left unchanged.'
     }
     Enable-MonitorDrivers
-    foreach ($d in [VSDisplay3]::Displays()) { [void][VSDisplay3]::Restore($d) }
+    foreach ($d in [VSDisplay4]::Displays()) { [void][VSDisplay4]::Restore($d) }
     Write-Ok 'Done. Restart your PC to be 100% back to normal.'
 }
 
@@ -507,16 +542,16 @@ function Read-Resolution {
         if ($saved -match '^\d+x\d+$') { $def = $saved }
     }
     $presets = @('1280x960', '1440x1080', '1024x768', '1280x1024', '1680x1050', '1600x900')
-    $mons    = [VSDisplay3]::Displays()
-    $sizes   = @($mons | ForEach-Object { $c = [VSDisplay3]::Current($_); "$($c[2])x$($c[3])@$($c[4])Hz" })
-    $maxW    = ($mons | ForEach-Object { ([VSDisplay3]::Current($_))[2] } | Measure-Object -Maximum).Maximum
-    $maxH    = ($mons | ForEach-Object { ([VSDisplay3]::Current($_))[3] } | Measure-Object -Maximum).Maximum
+    $mons    = [VSDisplay4]::Displays()
+    $sizes   = @($mons | ForEach-Object { $c = [VSDisplay4]::Current($_); "$($c[2])x$($c[3])@$($c[4])Hz" })
+    $maxW    = ($mons | ForEach-Object { ([VSDisplay4]::Current($_))[2] } | Measure-Object -Maximum).Maximum
+    $maxH    = ($mons | ForEach-Object { ([VSDisplay4]::Current($_))[3] } | Measure-Object -Maximum).Maximum
 
     Write-Host ''
     Write-Host '  Resolution:' -ForegroundColor White
     for ($i = 0; $i -lt $presets.Count; $i++) {
         $w, $h = $presets[$i] -split 'x'
-        $hzs = @($mons | ForEach-Object { $x = [VSDisplay3]::MaxHz($_, [int]$w, [int]$h); if ($x -gt 0) { "${x}Hz" } else { '-' } })
+        $hzs = @($mons | ForEach-Object { $x = [VSDisplay4]::MaxHz($_, [int]$w, [int]$h); if ($x -gt 0) { "${x}Hz" } else { '-' } })
         $tag = if ($hzs -ne '-') { $hzs -join ' / ' } else { 'needs custom res' }
         Write-Host ("   {0}) {1,-10} {2}" -f ($i + 1), $presets[$i], $tag) -ForegroundColor Gray
     }
@@ -563,7 +598,7 @@ if (-not $Revert -and -not ($PSBoundParameters.ContainsKey('Width') -or $PSBound
 if (-not $Revert) {
     Write-Host ''
     Write-Host "  Using ${Width}x${Height}" -ForegroundColor Magenta
-    if (-not (@([VSDisplay3]::Displays() | Where-Object { [VSDisplay3]::MaxHz($_, $Width, $Height) -gt 0 }))) {
+    if (-not (@([VSDisplay4]::Displays() | Where-Object { [VSDisplay4]::MaxHz($_, $Width, $Height) -gt 0 }))) {
         Write-Warn2 "${Width}x${Height} isn't in your monitor's list - add it as a custom resolution first:"
         Write-Warn2 '  NVIDIA Control Panel > Change resolution > Customize > Create Custom Resolution'
         Write-Warn2 '  AMD Software > Gaming/Display > Custom Resolutions'

@@ -40,6 +40,10 @@ irm https://raw.githubusercontent.com/Youssef-Hawary/hawary-valorant-stretch-scr
 
 ## Still seeing black bars?
 
+**Bars on top and bottom** = Valorant's own Letterbox is still on (it's synced to your Riot account and can override the config). Run the script, pick **4) One-time Fill setup**, and follow the on-screen steps once. After that just use `Play-Stretched.bat`.
+
+**Bars on the sides** = scaling, check these:
+
 1. Make sure you started the game with **Play-Stretched.bat** and left its window open.
 2. Restart your PC once after the first run (loads the new display scaling).
 3. **NVIDIA:** Control Panel > *Adjust desktop size and position* > Scaling mode **Full-screen**, Perform scaling on **GPU**, tick **Override the scaling mode set by games and programs** > Apply.

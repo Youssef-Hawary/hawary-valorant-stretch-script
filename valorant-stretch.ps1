@@ -27,6 +27,7 @@ param(
     [switch]$Apply,
     [switch]$Launch,
     [switch]$Revert,
+    [switch]$SetupFill,           # one-time: set Aspect Ratio = Fill inside the game
     [switch]$KeepMonitorDriver,   # don't disable the monitor in Device Manager
     [int]$Width = 1280,
     [int]$Height = 960
@@ -486,6 +487,49 @@ function Enable-MonitorDrivers {
     Write-Ok "Monitor driver(s) re-enabled in Device Manager."
 }
 
+function Invoke-SetupFill {
+    if (Test-Path $LastResFile) {
+        $saved = (Get-Content $LastResFile -Raw).Trim()
+        if ($saved -match '^(\d+)x(\d+)$') { $script:Width = [int]$Matches[1]; $script:Height = [int]$Matches[2] }
+    }
+    # Valorant syncs Aspect Ratio Method with your Riot account, which can override
+    # the config file (bars on top + bottom = Letterbox is still on). Setting Fill
+    # once inside the game saves it to the account for good.
+    Stop-Riot
+    if (Test-Path $MonStateFile) { Enable-MonitorDrivers }
+    foreach ($d in [VSDisplay4]::Displays()) { [void][VSDisplay4]::Restore($d) }
+    foreach ($f in Get-ValorantInis) { $f.IsReadOnly = $false }
+
+    $riot = Find-RiotClient
+    if (-not $riot) { Write-Bad 'Could not find RiotClientServices.exe - is Valorant installed?'; return }
+    Write-Step 'Launching Valorant normally for the one-time Fill setup...'
+    Start-Process -FilePath $riot -ArgumentList '--launch-product=valorant', '--launch-patchline=live'
+
+    Write-Host ''
+    Write-Host '  In Valorant: Settings > Video > General' -ForegroundColor White
+    Write-Host '    1. Display Mode = Fullscreen'
+    Write-Host "    2. Resolution   = ${Width}x${Height} (any 4:3 one works)   -> Apply"
+    Write-Host '    3. Aspect Ratio Method = Fill                             -> Apply'
+    Write-Host '    4. Display Mode = Windowed Fullscreen                     -> Apply'
+    Write-Host '    5. Close the game.'
+    Write-Host ''
+    Write-Step 'Waiting for you to finish and close Valorant...'
+
+    $deadline = (Get-Date).AddMinutes(10); $game = $null
+    while (-not $game -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        $game = Get-Process -Name 'VALORANT-Win64-Shipping' -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if (-not $game) { Write-Warn2 'Valorant did not start in time.'; return }
+    $game.WaitForExit()
+    Start-Sleep -Seconds 3
+
+    if (Invoke-Apply) {
+        Write-Host ''
+        Write-Ok 'Fill is now saved to your account. From now on just use Play-Stretched.bat.'
+    }
+}
+
 function Invoke-Launch {
     $changedDevs = New-Object System.Collections.Generic.List[string]
     try {
@@ -665,24 +709,26 @@ Write-Host ''
 Write-Host '  VALORANT STRETCHED' -ForegroundColor Magenta
 Write-Host '  ----------------------------------' -ForegroundColor DarkGray
 
-if (-not ($Apply -or $Launch -or $Revert)) {
+if (-not ($Apply -or $Launch -or $Revert -or $SetupFill)) {
     Write-Host '  1) Play Valorant stretched  (use this every time you play)'
     Write-Host '  2) Only patch the config + GPU scaling'
     Write-Host '  3) Revert everything'
+    Write-Host '  4) One-time Fill setup  (black bars on top + bottom? do this once)'
     Write-Host ''
-    switch (Read-Host '  Choose 1, 2 or 3') {
+    switch (Read-Host '  Choose 1-4') {
         '1' { $Launch = $true }
         '2' { $Apply = $true }
         '3' { $Revert = $true }
+        '4' { $SetupFill = $true }
         default { Write-Bad 'Nothing selected.'; return }
     }
 }
 
 # Ask for the resolution unless it was given on the command line (-Width / -Height).
-if (-not $Revert -and -not ($PSBoundParameters.ContainsKey('Width') -or $PSBoundParameters.ContainsKey('Height'))) {
+if (-not $Revert -and -not $SetupFill -and -not ($PSBoundParameters.ContainsKey('Width') -or $PSBoundParameters.ContainsKey('Height'))) {
     $Width, $Height = Read-Resolution
 }
-if (-not $Revert) {
+if (-not $Revert -and -not $SetupFill) {
     Write-Host ''
     Write-Host "  Using ${Width}x${Height}" -ForegroundColor Magenta
     if (-not (@([VSDisplay4]::Displays() | Where-Object { [VSDisplay4]::MaxHz($_, $Width, $Height) -gt 0 }))) {
@@ -698,6 +744,7 @@ try {
         Enable-MonitorDrivers
     }
     if ($Revert)     { Invoke-Revert }
+    elseif ($SetupFill) { Invoke-SetupFill }
     elseif ($Launch) { Invoke-Launch }
     else {
         if (Invoke-Apply) {

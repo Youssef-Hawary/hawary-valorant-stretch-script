@@ -27,6 +27,7 @@ param(
     [switch]$Apply,
     [switch]$Launch,
     [switch]$Revert,
+    [switch]$KeepMonitorDriver,   # don't disable the monitor in Device Manager
     [int]$Width = 1280,
     [int]$Height = 960
 )
@@ -329,14 +330,56 @@ function Find-RiotClient {
     return $null
 }
 
+# ------------------------------------------------- monitor driver toggle ----
+# Disabling the monitor in Device Manager stops Windows from forcing the
+# monitor's real aspect ratio, so a 4:3 resolution actually fills the screen.
+$MonStateFile = Join-Path $StateDir 'disabled-monitors.txt'
+
+function Disable-MonitorDrivers {
+    $mons = @(Get-PnpDevice -Class Monitor -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'OK' })
+    if ($mons.Count -eq 0) { Write-Warn2 'No active monitor devices found in Device Manager.'; return }
+    Write-Step ("Disabling monitor driver in Device Manager: " + (($mons | ForEach-Object { $_.FriendlyName }) -join ', '))
+    New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+    $n = 0
+    foreach ($m in $mons) {
+        try {
+            Disable-PnpDevice -InstanceId $m.InstanceId -Confirm:$false -ErrorAction Stop
+            Add-Content -Path $MonStateFile -Value $m.InstanceId
+            $n++
+        } catch { Write-Warn2 "Could not disable $($m.FriendlyName): $($_.Exception.Message)" }
+    }
+    if ($n -gt 0) {
+        Start-Sleep -Seconds 4   # let Windows re-detect the screens
+        Write-Ok "Disabled $n monitor driver(s). Screens stay on - they come back to normal when you quit."
+    }
+}
+
+function Enable-MonitorDrivers {
+    $ids = @()
+    if (Test-Path $MonStateFile) { $ids += @(Get-Content $MonStateFile | Where-Object { $_.Trim() }) }
+    # Also catch any monitor left disabled (code 22) if the window was closed mid-game.
+    $ids += @(Get-PnpDevice -Class Monitor -PresentOnly -ErrorAction SilentlyContinue |
+              Where-Object { $_.ConfigManagerErrorCode -eq 22 } | ForEach-Object { $_.InstanceId })
+    $ids = @($ids | Select-Object -Unique)
+    if ($ids.Count -eq 0) { return }
+    foreach ($id in $ids) {
+        try { Enable-PnpDevice -InstanceId $id -Confirm:$false -ErrorAction Stop } catch { }
+    }
+    Remove-Item $MonStateFile -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+    foreach ($d in [VSDisplay3]::Displays()) { [void][VSDisplay3]::Restore($d) }
+    Write-Ok "Monitor driver(s) re-enabled in Device Manager."
+}
+
 function Invoke-Launch {
-    if (-not (Invoke-Apply)) { return }
-
-    $riot = Find-RiotClient
-    if (-not $riot) { Write-Bad 'Could not find RiotClientServices.exe - is Valorant installed?'; return }
-
     $changedDevs = New-Object System.Collections.Generic.List[string]
     try {
+        if (-not $KeepMonitorDriver) { Stop-Riot; Disable-MonitorDrivers }
+        if (-not (Invoke-Apply)) { return }
+
+        $riot = Find-RiotClient
+        if (-not $riot) { Write-Bad 'Could not find RiotClientServices.exe - is Valorant installed?'; return }
+
         # Launch at native resolution first (Valorant resets the screen while it starts up).
         Write-Step 'Launching Valorant...'
         Start-Process -FilePath $riot -ArgumentList '--launch-product=valorant', '--launch-patchline=live'
@@ -411,6 +454,7 @@ function Invoke-Launch {
     finally {
         foreach ($d in $changedDevs) { [void][VSDisplay3]::Restore($d) }
         if ($changedDevs.Count -gt 0) { Write-Ok 'Monitor resolution restored.' }
+        if (-not $KeepMonitorDriver) { Enable-MonitorDrivers }
     }
 }
 
@@ -440,6 +484,7 @@ function Invoke-Revert {
     } else {
         Write-Warn2 'No scaling backup found - display scaling left unchanged.'
     }
+    Enable-MonitorDrivers
     foreach ($d in [VSDisplay3]::Displays()) { [void][VSDisplay3]::Restore($d) }
     Write-Ok 'Done. Restart your PC to be 100% back to normal.'
 }
@@ -519,6 +564,10 @@ if (-not $Revert) {
 }
 
 try {
+    if ((Test-Path $MonStateFile) -and -not $Revert) {
+        Write-Warn2 'Monitor driver was left disabled last time - turning it back on first.'
+        Enable-MonitorDrivers
+    }
     if ($Revert)     { Invoke-Revert }
     elseif ($Launch) { Invoke-Launch }
     else {

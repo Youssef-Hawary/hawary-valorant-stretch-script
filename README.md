@@ -25,10 +25,12 @@ irm https://raw.githubusercontent.com/Youssef-Hawary/hawary-valorant-stretch-scr
 | `valorant-stretch.ps1` | Menu |
 | `valorant-stretch.ps1 -Apply` | Patches Valorant's config + sets GPU scaling to stretch |
 | `valorant-stretch.ps1 -Launch` | Applies the config, starts Valorant, then keeps the monitor the game is on at your resolution, stretched, at that monitor's highest refresh rate (e.g. 240Hz on a 240Hz screen, 100Hz on a 100Hz one), with the game window borderless full screen. If you move the game to another monitor it follows it. If Valorant snaps back to native, it's switched back within ~2 seconds. Your normal resolution returns when the game closes. `Play-Stretched.bat` does this in one click. |
-| `valorant-stretch.ps1 -Revert` | Restores the original config files and scaling |
+| `valorant-stretch.ps1 -Revert` | Restores the original config files and scaling, re-enables the monitor driver |
 | `-Width 1440 -Height 1080` | Skip the resolution prompt and use this one |
 
 ## What it changes
+
+- **Monitor driver (Play mode)** - before launching, it disables your monitor(s) under *Device Manager > Monitors* (the "true stretched" trick: without the monitor driver Windows stops forcing the real aspect ratio, so 4:3 fills the screen). The screens keep working. When you close Valorant it turns them back on. If the console window gets closed mid-game, the next run (or `-Revert`) re-enables them. Use `-KeepMonitorDriver` to skip this.
 
 - **Valorant config** - every `GameUserSettings.ini` under `%LOCALAPPDATA%\VALORANT\Saved\Config` gets 1280x960, Windowed mode, letterbox off (Valorant's own Fullscreen mode always resets to native, so the launcher runs it windowed and makes the window borderless full screen - same as the WinEXP method). The files are set **read-only** so Riot can't reset them. A `.stretch-backup` copy is kept next to each.
   - Because the files are read-only, other video settings you change in-game won't save. Run `-Revert`, change them, then apply again.

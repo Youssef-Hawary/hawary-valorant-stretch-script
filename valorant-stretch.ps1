@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Valorant stretched resolution (default 1280x960) for Windows - no black bars.
+    Valorant stretched resolution (you pick it, default 1280x960) for Windows - no black bars.
 
 .DESCRIPTION
     What it does:
@@ -265,10 +265,6 @@ function Invoke-Apply {
     $hz = [VSDisplay2]::MaxHz($Width, $Height)
     if ($hz -gt 0) {
         Write-Ok "Your monitor supports ${Width}x${Height} up to ${hz}Hz."
-    } else {
-        Write-Warn2 "${Width}x${Height} is not in your monitor's mode list yet."
-        Write-Warn2 'Create it once: NVIDIA Control Panel > Change resolution > Customize > Create Custom Resolution'
-        Write-Warn2 "  (${Width} x ${Height}, your max refresh rate), or AMD Software > Display > Custom Resolutions."
     }
     return $true
 }
@@ -387,8 +383,46 @@ function Invoke-Revert {
 }
 
 # ------------------------------------------------------------------ main ----
+$LastResFile = Join-Path $StateDir 'last-resolution.txt'
+
+function Read-Resolution {
+    # Default = last resolution you used, otherwise 1280x960.
+    $def = '1280x960'
+    if (Test-Path $LastResFile) {
+        $saved = (Get-Content $LastResFile -Raw).Trim()
+        if ($saved -match '^\d+x\d+$') { $def = $saved }
+    }
+    $presets = @('1280x960', '1440x1080', '1024x768', '1280x1024', '1680x1050', '1600x900')
+    $native  = [VSDisplay2]::Current()
+
+    Write-Host ''
+    Write-Host '  Resolution:' -ForegroundColor White
+    for ($i = 0; $i -lt $presets.Count; $i++) {
+        $w, $h = $presets[$i] -split 'x'
+        $hz = [VSDisplay2]::MaxHz([int]$w, [int]$h)
+        $tag = if ($hz -gt 0) { "${hz}Hz" } else { 'needs custom res' }
+        Write-Host ("   {0}) {1,-10} {2}" -f ($i + 1), $presets[$i], $tag) -ForegroundColor Gray
+    }
+    Write-Host "   Or type any resolution, e.g. 1350x1080  (your monitor: $($native[0])x$($native[1]))" -ForegroundColor DarkGray
+
+    while ($true) {
+        $in = (Read-Host "  Resolution [Enter = $def]").Trim().ToLower()
+        if ($in -eq '') { $in = $def }
+        if ($in -match '^\d$' -and [int]$in -ge 1 -and [int]$in -le $presets.Count) { $in = $presets[[int]$in - 1] }
+        if ($in -match '^\s*(\d{3,4})\s*[x\*, ]\s*(\d{3,4})\s*$') {
+            $w = [int]$Matches[1]; $h = [int]$Matches[2]
+            if ($w -lt 640 -or $h -lt 480) { Write-Bad 'Too small - minimum is 640x480.'; continue }
+            if ($w -gt $native[0] -or $h -gt $native[1]) { Write-Bad "Bigger than your monitor ($($native[0])x$($native[1])) - nothing to stretch."; continue }
+            New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+            Set-Content -Path $LastResFile -Value "${w}x${h}"
+            return @($w, $h)
+        }
+        Write-Bad 'Type it like 1280x960, or a number from the list.'
+    }
+}
+
 Write-Host ''
-Write-Host "  VALORANT STRETCHED  ${Width}x${Height}" -ForegroundColor Magenta
+Write-Host '  VALORANT STRETCHED' -ForegroundColor Magenta
 Write-Host '  ----------------------------------' -ForegroundColor DarkGray
 
 if (-not ($Apply -or $Launch -or $Revert)) {
@@ -401,6 +435,20 @@ if (-not ($Apply -or $Launch -or $Revert)) {
         '2' { $Apply = $true }
         '3' { $Revert = $true }
         default { Write-Bad 'Nothing selected.'; return }
+    }
+}
+
+# Ask for the resolution unless it was given on the command line (-Width / -Height).
+if (-not $Revert -and -not ($PSBoundParameters.ContainsKey('Width') -or $PSBoundParameters.ContainsKey('Height'))) {
+    $Width, $Height = Read-Resolution
+}
+if (-not $Revert) {
+    Write-Host ''
+    Write-Host "  Using ${Width}x${Height}" -ForegroundColor Magenta
+    if ([VSDisplay2]::MaxHz($Width, $Height) -eq 0) {
+        Write-Warn2 "${Width}x${Height} isn't in your monitor's list - add it as a custom resolution first:"
+        Write-Warn2 '  NVIDIA Control Panel > Change resolution > Customize > Create Custom Resolution'
+        Write-Warn2 '  AMD Software > Gaming/Display > Custom Resolutions'
     }
 }
 

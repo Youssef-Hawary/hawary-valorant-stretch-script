@@ -1,6 +1,6 @@
-# Valorant Stretched 1280x960
+# Valorant Stretched Resolution
 
-One script that puts Valorant on **1280x960 stretched** (full screen, no black bars) on Windows 10/11, and can undo it all.
+One script that puts Valorant on **any stretched resolution you type** (1280x960 by default) (full screen, no black bars) on Windows 10/11, and can undo it all.
 
 ## Quick start
 
@@ -8,7 +8,7 @@ One script that puts Valorant on **1280x960 stretched** (full screen, no black b
 
 1. Download this repo (green **Code** button > **Download ZIP**) and unzip it.
 2. Double-click **`ValorantStretch.bat`** and accept the admin prompt.
-3. Pick **1**. Every time you play, start Valorant with **`Play-Stretched.bat`** (or option 1) instead of the normal shortcut.
+3. Pick **1**, then type the resolution you want (e.g. `1440x1080`, or a number from the list - Enter reuses your last one). Every time you play, start Valorant with **`Play-Stretched.bat`** (or option 1) instead of the normal shortcut.
 
 **Option B - one line in PowerShell (run as Administrator)**
 
@@ -26,7 +26,7 @@ irm https://raw.githubusercontent.com/Youssef-Hawary/hawary-valorant-stretch-scr
 | `valorant-stretch.ps1 -Apply` | Patches Valorant's config + sets GPU scaling to stretch |
 | `valorant-stretch.ps1 -Launch` | Applies the config, starts Valorant, then keeps the screen at 1280x960 stretched (max Hz) and the game window borderless full screen. If Valorant snaps back to native, it's switched back within ~2 seconds. Your normal resolution returns when the game closes. `Play-Stretched.bat` does this in one click. |
 | `valorant-stretch.ps1 -Revert` | Restores the original config files and scaling |
-| `-Width 1440 -Height 1080` | Any other stretched resolution |
+| `-Width 1440 -Height 1080` | Skip the resolution prompt and use this one |
 
 ## What it changes
 

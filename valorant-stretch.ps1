@@ -496,7 +496,7 @@ function Invoke-SetupFill {
     # the config file (bars on top + bottom = Letterbox is still on). Setting Fill
     # once inside the game saves it to the account for good.
     Stop-Riot
-    if (Test-Path $MonStateFile) { Enable-MonitorDrivers }
+    Enable-MonitorDrivers   # Valorant needs the real monitor driver to list resolutions
     foreach ($d in [VSDisplay4]::Displays()) { [void][VSDisplay4]::Restore($d) }
     foreach ($f in Get-ValorantInis) { $f.IsReadOnly = $false }
 

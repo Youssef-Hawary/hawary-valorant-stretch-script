@@ -24,7 +24,7 @@ irm https://raw.githubusercontent.com/Youssef-Hawary/hawary-valorant-stretch-scr
 |---|---|
 | `valorant-stretch.ps1` | Menu |
 | `valorant-stretch.ps1 -Apply` | Patches Valorant's config + sets GPU scaling to stretch |
-| `valorant-stretch.ps1 -Launch` | Applies the config, starts Valorant, then keeps the screen at 1280x960 stretched (max Hz) and the game window borderless full screen. If Valorant snaps back to native, it's switched back within ~2 seconds. Your normal resolution returns when the game closes. `Play-Stretched.bat` does this in one click. |
+| `valorant-stretch.ps1 -Launch` | Applies the config, starts Valorant, then keeps the monitor the game is on at your resolution, stretched, at that monitor's highest refresh rate (e.g. 240Hz on a 240Hz screen, 100Hz on a 100Hz one), with the game window borderless full screen. If you move the game to another monitor it follows it. If Valorant snaps back to native, it's switched back within ~2 seconds. Your normal resolution returns when the game closes. `Play-Stretched.bat` does this in one click. |
 | `valorant-stretch.ps1 -Revert` | Restores the original config files and scaling |
 | `-Width 1440 -Height 1080` | Skip the resolution prompt and use this one |
 

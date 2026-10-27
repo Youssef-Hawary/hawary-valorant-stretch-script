@@ -63,11 +63,12 @@ if (-not $isAdmin) {
 }
 
 # ------------------------------------------------------- display (Win32) ----
-if (-not ('VSDisplay2' -as [type])) {
+if (-not ('VSDisplay3' -as [type])) {
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
-public static class VSDisplay2 {
+public static class VSDisplay3 {
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct DEVMODE {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
@@ -81,14 +82,28 @@ public static class VSDisplay2 {
         public int dmICMMethod; public int dmICMIntent; public int dmMediaType; public int dmDitherType;
         public int dmReserved1; public int dmReserved2; public int dmPanningWidth; public int dmPanningHeight;
     }
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    static extern int ChangeDisplaySettingsEx(string dev, ref DEVMODE dm, IntPtr hwnd, int flags, IntPtr lp);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    static extern int ChangeDisplaySettingsEx(string dev, IntPtr dm, IntPtr hwnd, int flags, IntPtr lp);
-
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DISPLAY_DEVICE {
+        public int cb;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]  public string DeviceName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceString;
+        public int StateFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceID;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
+    }
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MONITORINFOEX {
+        public int cbSize; public RECT rcMonitor; public RECT rcWork; public int dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplayDevices(string dev, uint i, ref DISPLAY_DEVICE dd, uint f);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int ChangeDisplaySettingsEx(string dev, ref DEVMODE dm, IntPtr hwnd, int flags, IntPtr lp);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int ChangeDisplaySettingsEx(string dev, IntPtr dm, IntPtr hwnd, int flags, IntPtr lp);
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint f);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFOEX mi);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
@@ -103,53 +118,82 @@ public static class VSDisplay2 {
     // Real pixel coordinates even with Windows display scaling (125%, 150%...).
     public static void DpiAware() { try { SetProcessDPIAware(); } catch { } }
 
-    public static IntPtr GameWindow() { return FindWindow("VALORANTUnrealWindow", null); }
-
-    // Make the Valorant window borderless and exactly cover (0,0)-(w,h).
-    // Returns -1 = no usable window, 0 = already correct, 1 = fixed it.
-    public static int FitWindow(IntPtr h, int w, int hh) {
-        if (h == IntPtr.Zero || !IsWindowVisible(h) || IsIconic(h)) return -1;
-        int s  = GetWindowLong(h, -16);
-        int ns = s & ~(0x00C00000 | 0x00040000 | 0x00080000 | 0x00020000 | 0x00010000); // caption, sizing frame, sysmenu, min/max
-        int ex  = GetWindowLong(h, -20);
-        int nex = ex & ~(0x1 | 0x100 | 0x200 | 0x20000);                                // dialog/window/client/static edges
-        RECT r; GetWindowRect(h, out r);
-        if (ns == s && nex == ex && r.L == 0 && r.T == 0 && r.R == w && r.B == hh) return 0;
-        if (ns != s) SetWindowLong(h, -16, ns);
-        if (nex != ex) SetWindowLong(h, -20, nex);
-        SetWindowPos(h, IntPtr.Zero, 0, 0, w, hh, 0x0020 | 0x0040 | 0x0200); // FRAMECHANGED | SHOWWINDOW | NOOWNERZORDER
-        return 1;
+    // Every monitor that is part of the desktop, e.g. \\.\DISPLAY1. Primary first.
+    public static string[] Displays() {
+        List<string> list = new List<string>();
+        DISPLAY_DEVICE dd = new DISPLAY_DEVICE(); dd.cb = Marshal.SizeOf(typeof(DISPLAY_DEVICE));
+        for (uint i = 0; EnumDisplayDevices(null, i, ref dd, 0); i++) {
+            if ((dd.StateFlags & 1) == 0) continue;                 // ATTACHED_TO_DESKTOP
+            if ((dd.StateFlags & 4) != 0) list.Insert(0, dd.DeviceName); // PRIMARY_DEVICE
+            else list.Add(dd.DeviceName);
+            dd.cb = Marshal.SizeOf(typeof(DISPLAY_DEVICE));
+        }
+        return list.ToArray();
     }
 
-    public static int[] Current() {
+    // x, y, width, height, Hz of a monitor right now.
+    public static int[] Current(string dev) {
         DEVMODE d = New();
-        EnumDisplaySettings(null, -1, ref d);
-        return new int[] { d.dmPelsWidth, d.dmPelsHeight, d.dmDisplayFrequency };
+        EnumDisplaySettings(dev, -1, ref d);
+        return new int[] { d.dmPositionX, d.dmPositionY, d.dmPelsWidth, d.dmPelsHeight, d.dmDisplayFrequency };
     }
-    // Highest refresh rate available for WxH on the primary monitor, 0 if the mode doesn't exist.
-    public static int MaxHz(int w, int h) {
+
+    // Highest refresh rate this monitor offers at WxH (0 = mode doesn't exist).
+    public static int MaxHz(string dev, int w, int h) {
         int best = 0; DEVMODE d = New();
-        for (int i = 0; EnumDisplaySettings(null, i, ref d); i++)
+        for (int i = 0; EnumDisplaySettings(dev, i, ref d); i++)
             if (d.dmPelsWidth == w && d.dmPelsHeight == h && d.dmBitsPerPel == 32 && d.dmDisplayFrequency > best)
                 best = d.dmDisplayFrequency;
         return best;
     }
-    // Temporary mode change (not saved), with DMDFO_STRETCH so the driver fills the screen.
-    public static int SetStretched(int w, int h, int hz) {
+
+    // Temporary mode change (not saved) with DMDFO_STRETCH so the image fills the panel.
+    public static int SetStretched(string dev, int w, int h, int hz) {
         DEVMODE d = New();
-        EnumDisplaySettings(null, -1, ref d);
+        EnumDisplaySettings(dev, -1, ref d);
         d.dmPelsWidth = w; d.dmPelsHeight = h; d.dmBitsPerPel = 32;
-        d.dmDisplayFixedOutput = 1; // DMDFO_STRETCH
+        d.dmDisplayFixedOutput = 1;
         d.dmFields = 0x80000 | 0x100000 | 0x40000 | 0x20000000;
         if (hz > 0) { d.dmDisplayFrequency = hz; d.dmFields |= 0x400000; }
-        return ChangeDisplaySettingsEx(null, ref d, IntPtr.Zero, 0, IntPtr.Zero);
+        return ChangeDisplaySettingsEx(dev, ref d, IntPtr.Zero, 0, IntPtr.Zero);
     }
-    // Go back to the resolution saved in Windows settings.
-    public static int Restore() { return ChangeDisplaySettingsEx(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero); }
+
+    // Put a monitor back to the resolution saved in Windows settings.
+    public static int Restore(string dev) { return ChangeDisplaySettingsEx(dev, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero); }
+
+    public static IntPtr GameWindow() { return FindWindow("VALORANTUnrealWindow", null); }
+
+    // Which monitor a window is (mostly) on.
+    public static string WindowDisplay(IntPtr h) {
+        if (h == IntPtr.Zero) return null;
+        IntPtr m = MonitorFromWindow(h, 2); // NEAREST
+        MONITORINFOEX mi = new MONITORINFOEX(); mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX));
+        return GetMonitorInfo(m, ref mi) ? mi.szDevice : null;
+    }
+
+    public static bool WindowAt(IntPtr h, int x, int y, int w, int hh) {
+        RECT r; if (h == IntPtr.Zero || !GetWindowRect(h, out r)) return false;
+        return r.L == x && r.T == y && r.R == x + w && r.B == y + hh;
+    }
+
+    // Make the window borderless and exactly cover x,y,w,h.
+    // Returns -1 = no usable window, 0 = already correct, 1 = fixed it.
+    public static int FitWindow(IntPtr h, int x, int y, int w, int hh) {
+        if (h == IntPtr.Zero || !IsWindowVisible(h) || IsIconic(h)) return -1;
+        int s  = GetWindowLong(h, -16);
+        int ns = s & ~(0x00C00000 | 0x00040000 | 0x00080000 | 0x00020000 | 0x00010000);
+        int ex  = GetWindowLong(h, -20);
+        int nex = ex & ~(0x1 | 0x100 | 0x200 | 0x20000);
+        if (ns == s && nex == ex && WindowAt(h, x, y, w, hh)) return 0;
+        if (ns != s) SetWindowLong(h, -16, ns);
+        if (nex != ex) SetWindowLong(h, -20, nex);
+        SetWindowPos(h, IntPtr.Zero, x, y, w, hh, 0x0020 | 0x0040 | 0x0200);
+        return 1;
+    }
 }
 '@
 }
-[VSDisplay2]::DpiAware()
+[VSDisplay3]::DpiAware()
 
 # -------------------------------------------------------------- helpers ----
 function Stop-Riot {
@@ -262,9 +306,9 @@ function Invoke-Apply {
 
     Set-GpuStretch
 
-    $hz = [VSDisplay2]::MaxHz($Width, $Height)
-    if ($hz -gt 0) {
-        Write-Ok "Your monitor supports ${Width}x${Height} up to ${hz}Hz."
+    foreach ($d in [VSDisplay3]::Displays()) {
+        $hz = [VSDisplay3]::MaxHz($d, $Width, $Height)
+        if ($hz -gt 0) { Write-Ok "$($d.TrimStart('\.')): ${Width}x${Height} available up to ${hz}Hz." }
     }
     return $true
 }
@@ -291,10 +335,7 @@ function Invoke-Launch {
     $riot = Find-RiotClient
     if (-not $riot) { Write-Bad 'Could not find RiotClientServices.exe - is Valorant installed?'; return }
 
-    $hz   = [VSDisplay2]::MaxHz($Width, $Height)
-    $orig = [VSDisplay2]::Current()
-    $hzText = if ($hz -gt 0) { "${hz}Hz" } else { 'default Hz' }
-    $changed = $false
+    $changedDevs = New-Object System.Collections.Generic.List[string]
     try {
         # Launch at native resolution first (Valorant resets the screen while it starts up).
         Write-Step 'Launching Valorant...'
@@ -305,30 +346,52 @@ function Invoke-Launch {
         $game = $null
         while ((Get-Date) -lt $deadline) {
             $game = Get-Process -Name 'VALORANT-Win64-Shipping' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($game -and [VSDisplay2]::GameWindow() -ne [IntPtr]::Zero) { break }
+            if ($game -and [VSDisplay3]::GameWindow() -ne [IntPtr]::Zero) { break }
             Start-Sleep -Seconds 2
         }
         if (-not $game) { Write-Warn2 'Valorant did not start in time.'; return }
         Start-Sleep -Seconds 5   # let it finish creating its window
 
-        Write-Ok "Valorant is up. Keeping it at ${Width}x${Height} stretched - leave this window open."
+        Write-Ok 'Valorant is up - leave this window open while you play.'
         Write-Host '    (Your normal resolution comes back automatically when you close the game.)' -ForegroundColor Gray
 
-        # Watchdog: whenever Valorant (or anything) puts the screen back to native,
-        # switch it to WxH again and refit the game window to cover the whole screen.
+        # Watchdog: follow whichever monitor the game is on, keep that monitor at
+        # WxH stretched at its highest refresh rate, and keep the window covering it.
+        $activeDev = $null; $hz = 0
         $resets = New-Object System.Collections.Generic.Queue[datetime]
         $forceDesktop = $true
-        $announced = $false
         while (-not $game.HasExited) {
-            $cur = [VSDisplay2]::Current()
-            if ($forceDesktop -and ($cur[0] -ne $Width -or $cur[1] -ne $Height)) {
-                $r = [VSDisplay2]::SetStretched($Width, $Height, $hz)
+            $win = [VSDisplay3]::GameWindow()
+            $dev = [VSDisplay3]::WindowDisplay($win)
+            if (-not $dev) { $dev = ([VSDisplay3]::Displays())[0] }
+
+            # Switch monitors only if the game really moved (not just mid-resize).
+            if ($dev -ne $activeDev) {
+                $stay = $false
+                if ($activeDev) {
+                    $a = [VSDisplay3]::Current($activeDev)
+                    $stay = [VSDisplay3]::WindowAt($win, $a[0], $a[1], $a[2], $a[3])
+                }
+                if (-not $stay) {
+                    if ($activeDev -and $changedDevs.Contains($activeDev)) {
+                        [void][VSDisplay3]::Restore($activeDev); [void]$changedDevs.Remove($activeDev)
+                    }
+                    $activeDev = $dev
+                    $hz = [VSDisplay3]::MaxHz($dev, $Width, $Height)
+                    $resets.Clear(); $forceDesktop = $true
+                    $hzText = if ($hz -gt 0) { "${hz}Hz (max for this monitor)" } else { 'default Hz (mode not listed)' }
+                    Write-Ok "Game is on $($dev.TrimStart('\.')) -> ${Width}x${Height} @ $hzText"
+                }
+            }
+
+            $cur = [VSDisplay3]::Current($activeDev)
+            if ($forceDesktop -and ($cur[2] -ne $Width -or $cur[3] -ne $Height -or ($hz -gt 0 -and $cur[4] -ne $hz))) {
+                $r = [VSDisplay3]::SetStretched($activeDev, $Width, $Height, $hz)
                 if ($r -eq 0) {
-                    $changed = $true
+                    if (-not $changedDevs.Contains($activeDev)) { $changedDevs.Add($activeDev) }
                     $now = Get-Date
                     $resets.Enqueue($now)
                     while ($resets.Count -gt 0 -and ($now - $resets.Peek()).TotalSeconds -gt 60) { [void]$resets.Dequeue() }
-                    if (-not $announced) { Write-Ok "Screen set to ${Width}x${Height} @ $hzText (stretched)."; $announced = $true }
                     if ($resets.Count -ge 6) {
                         $forceDesktop = $false
                         Write-Bad 'Valorant keeps switching back to native - it is probably in Fullscreen mode.'
@@ -336,19 +399,18 @@ function Invoke-Launch {
                     }
                 } else {
                     $forceDesktop = $false
-                    Write-Bad "Windows refused ${Width}x${Height} (code $r). Add it as a custom resolution in your GPU panel (see README)."
+                    Write-Bad "Windows refused ${Width}x${Height} on this monitor (code $r). Add it as a custom resolution in your GPU panel (see README)."
                 }
+                $cur = [VSDisplay3]::Current($activeDev)
             }
-            [void][VSDisplay2]::FitWindow([VSDisplay2]::GameWindow(), $Width, $Height)
+            [void][VSDisplay3]::FitWindow($win, $cur[0], $cur[1], $cur[2], $cur[3])
             Start-Sleep -Milliseconds 1500
         }
         Write-Step 'Valorant closed.'
     }
     finally {
-        if ($changed) {
-            [void][VSDisplay2]::Restore()
-            Write-Ok "Desktop restored to $($orig[0])x$($orig[1]) @ $($orig[2])Hz."
-        }
+        foreach ($d in $changedDevs) { [void][VSDisplay3]::Restore($d) }
+        if ($changedDevs.Count -gt 0) { Write-Ok 'Monitor resolution restored.' }
     }
 }
 
@@ -378,7 +440,7 @@ function Invoke-Revert {
     } else {
         Write-Warn2 'No scaling backup found - display scaling left unchanged.'
     }
-    [void][VSDisplay2]::Restore()
+    foreach ($d in [VSDisplay3]::Displays()) { [void][VSDisplay3]::Restore($d) }
     Write-Ok 'Done. Restart your PC to be 100% back to normal.'
 }
 
@@ -393,17 +455,21 @@ function Read-Resolution {
         if ($saved -match '^\d+x\d+$') { $def = $saved }
     }
     $presets = @('1280x960', '1440x1080', '1024x768', '1280x1024', '1680x1050', '1600x900')
-    $native  = [VSDisplay2]::Current()
+    $mons    = [VSDisplay3]::Displays()
+    $sizes   = @($mons | ForEach-Object { $c = [VSDisplay3]::Current($_); "$($c[2])x$($c[3])@$($c[4])Hz" })
+    $maxW    = ($mons | ForEach-Object { ([VSDisplay3]::Current($_))[2] } | Measure-Object -Maximum).Maximum
+    $maxH    = ($mons | ForEach-Object { ([VSDisplay3]::Current($_))[3] } | Measure-Object -Maximum).Maximum
 
     Write-Host ''
     Write-Host '  Resolution:' -ForegroundColor White
     for ($i = 0; $i -lt $presets.Count; $i++) {
         $w, $h = $presets[$i] -split 'x'
-        $hz = [VSDisplay2]::MaxHz([int]$w, [int]$h)
-        $tag = if ($hz -gt 0) { "${hz}Hz" } else { 'needs custom res' }
+        $hzs = @($mons | ForEach-Object { $x = [VSDisplay3]::MaxHz($_, [int]$w, [int]$h); if ($x -gt 0) { "${x}Hz" } else { '-' } })
+        $tag = if ($hzs -ne '-') { $hzs -join ' / ' } else { 'needs custom res' }
         Write-Host ("   {0}) {1,-10} {2}" -f ($i + 1), $presets[$i], $tag) -ForegroundColor Gray
     }
-    Write-Host "   Or type any resolution, e.g. 1350x1080  (your monitor: $($native[0])x$($native[1]))" -ForegroundColor DarkGray
+    Write-Host "   Or type any resolution, e.g. 1350x1080" -ForegroundColor DarkGray
+    Write-Host "   Monitors: $($sizes -join ', ')  - Hz is picked automatically for the one the game is on" -ForegroundColor DarkGray
 
     while ($true) {
         $in = (Read-Host "  Resolution [Enter = $def]").Trim().ToLower()
@@ -412,7 +478,7 @@ function Read-Resolution {
         if ($in -match '^\s*(\d{3,4})\s*[x\*, ]\s*(\d{3,4})\s*$') {
             $w = [int]$Matches[1]; $h = [int]$Matches[2]
             if ($w -lt 640 -or $h -lt 480) { Write-Bad 'Too small - minimum is 640x480.'; continue }
-            if ($w -gt $native[0] -or $h -gt $native[1]) { Write-Bad "Bigger than your monitor ($($native[0])x$($native[1])) - nothing to stretch."; continue }
+            if ($w -gt $maxW -or $h -gt $maxH) { Write-Bad "Bigger than your monitor (${maxW}x${maxH}) - nothing to stretch."; continue }
             New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
             Set-Content -Path $LastResFile -Value "${w}x${h}"
             return @($w, $h)
@@ -445,7 +511,7 @@ if (-not $Revert -and -not ($PSBoundParameters.ContainsKey('Width') -or $PSBound
 if (-not $Revert) {
     Write-Host ''
     Write-Host "  Using ${Width}x${Height}" -ForegroundColor Magenta
-    if ([VSDisplay2]::MaxHz($Width, $Height) -eq 0) {
+    if (-not (@([VSDisplay3]::Displays() | Where-Object { [VSDisplay3]::MaxHz($_, $Width, $Height) -gt 0 }))) {
         Write-Warn2 "${Width}x${Height} isn't in your monitor's list - add it as a custom resolution first:"
         Write-Warn2 '  NVIDIA Control Panel > Change resolution > Customize > Create Custom Resolution'
         Write-Warn2 '  AMD Software > Gaming/Display > Custom Resolutions'

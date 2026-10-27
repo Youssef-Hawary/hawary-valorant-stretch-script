@@ -239,10 +239,11 @@ function Set-IniStretch($file) {
         'DesiredScreenHeight'                  = $Height
         'LastUserConfirmedDesiredScreenWidth'  = $Width
         'LastUserConfirmedDesiredScreenHeight' = $Height
-        # 2 = Windowed. Valorant's Fullscreen always snaps back to native res, so the
-        # launcher runs the game windowed and makes that window borderless + full screen.
-        'FullscreenMode'                       = 2
-        'LastConfirmedFullscreenMode'          = 2
+        # 1 = Windowed Fullscreen. Valorant's exclusive Fullscreen snaps back to native res;
+        # Windowed Fullscreen follows the desktop resolution and keeps Fill selectable.
+        'FullscreenMode'                       = 1
+        'LastConfirmedFullscreenMode'          = 1
+        'PreferredFullscreenMode'              = 1
         'bShouldLetterbox'                     = 'False'
         'bLastConfirmedShouldLetterbox'        = 'False'
     }
@@ -438,7 +439,7 @@ function Invoke-Launch {
                     if ($resets.Count -ge 6) {
                         $forceDesktop = $false
                         Write-Bad 'Valorant keeps switching back to native - it is probably in Fullscreen mode.'
-                        Write-Bad 'Close the game, run Revert, set Display Mode = Windowed in Valorant, then run this again.'
+                        Write-Bad 'Close the game, run Revert, set Display Mode = Windowed Fullscreen in Valorant, then run this again.'
                     }
                 } else {
                     $forceDesktop = $false

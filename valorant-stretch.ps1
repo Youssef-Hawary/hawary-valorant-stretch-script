@@ -326,6 +326,85 @@ function Set-GpuStretch {
 }
 
 # --------------------------------------------------------------- actions ----
+# ------------------------------------------ fullscreen optimizations off ----
+# When the game window has focus, Windows' "fullscreen optimizations" /
+# "optimizations for windowed games" take over presenting the frame and the
+# stretch is lost (black bars come back until you alt-tab). Turning both off
+# for VALORANT-Win64-Shipping.exe is the standard fix (same as ticking
+# "Disable fullscreen optimizations" in the exe's Compatibility tab).
+$CompatStateFile = Join-Path $StateDir 'compat-exes.txt'
+$LayersKey  = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers'
+$GpuPrefKey = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences'
+
+function Find-ValorantExe {
+    $tail = 'ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe'
+    $yaml = Join-Path $env:ProgramData 'Riot Games\Metadata\valorant.live\valorant.live.product_settings.yaml'
+    if (Test-Path $yaml) {
+        $line = Select-String -Path $yaml -Pattern 'product_install_full_path:\s*"?([^"]+)"?' | Select-Object -First 1
+        if ($line) {
+            $p = Join-Path ($line.Matches[0].Groups[1].Value -replace '/', '\') $tail
+            if (Test-Path $p) { return $p }
+        }
+    }
+    if (Test-Path $CompatStateFile) {
+        foreach ($p in Get-Content $CompatStateFile) { if ($p -and (Test-Path $p)) { return $p } }
+    }
+    foreach ($root in 'C:\Riot Games\VALORANT\live', 'D:\Riot Games\VALORANT\live', "${env:ProgramFiles}\Riot Games\VALORANT\live") {
+        $p = Join-Path $root $tail
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
+function Get-RegString($key, $name) {
+    try { return [string](Get-ItemProperty -Path $key -Name $name -ErrorAction Stop).$name } catch { return '' }
+}
+
+# Returns $true if anything had to be changed (the game must be restarted to pick it up).
+function Set-GameCompatFlags($exe) {
+    if (-not $exe) { return $false }
+    $changed = $false
+    foreach ($k in $LayersKey, $GpuPrefKey) { if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null } }
+
+    $layers = Get-RegString $LayersKey $exe
+    if ($layers -notmatch 'DISABLEDXMAXIMIZEDWINDOWEDMODE') {
+        $flags = @(($layers -replace '^~\s*', '') -split '\s+' | Where-Object { $_ }) + 'DISABLEDXMAXIMIZEDWINDOWEDMODE'
+        Set-ItemProperty -Path $LayersKey -Name $exe -Value ('~ ' + ($flags -join ' ')) -Type String
+        $changed = $true
+    }
+    $pref = Get-RegString $GpuPrefKey $exe
+    if ($pref -notmatch 'SwapEffectUpgradeEnable=0;') {
+        $pref = ($pref -replace 'SwapEffectUpgradeEnable=\d;', '') + 'SwapEffectUpgradeEnable=0;'
+        Set-ItemProperty -Path $GpuPrefKey -Name $exe -Value $pref -Type String
+        $changed = $true
+    }
+    New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+    if (-not ((Test-Path $CompatStateFile) -and (Get-Content $CompatStateFile) -contains $exe)) { Add-Content -Path $CompatStateFile -Value $exe }
+    if ($changed) { Write-Ok 'Turned off fullscreen optimizations for Valorant (stops the black bars when the game is focused).' }
+    return $changed
+}
+
+function Remove-GameCompatFlags {
+    if (-not (Test-Path $CompatStateFile)) { return }
+    foreach ($exe in Get-Content $CompatStateFile) {
+        if (-not $exe) { continue }
+        $layers = Get-RegString $LayersKey $exe
+        if ($layers) {
+            $rest = @(($layers -replace '^~\s*', '') -split '\s+' | Where-Object { $_ -and $_ -ne 'DISABLEDXMAXIMIZEDWINDOWEDMODE' })
+            if ($rest.Count -gt 0) { Set-ItemProperty -Path $LayersKey -Name $exe -Value ('~ ' + ($rest -join ' ')) }
+            else { Remove-ItemProperty -Path $LayersKey -Name $exe -ErrorAction SilentlyContinue }
+        }
+        $pref = Get-RegString $GpuPrefKey $exe
+        if ($pref) {
+            $pref = $pref -replace 'SwapEffectUpgradeEnable=0;', ''
+            if ($pref) { Set-ItemProperty -Path $GpuPrefKey -Name $exe -Value $pref }
+            else { Remove-ItemProperty -Path $GpuPrefKey -Name $exe -ErrorAction SilentlyContinue }
+        }
+    }
+    Remove-Item $CompatStateFile -Force
+    Write-Ok 'Fullscreen optimizations for Valorant restored.'
+}
+
 function Invoke-Apply {
     Stop-Riot
 
@@ -341,6 +420,7 @@ function Invoke-Apply {
     }
 
     Set-GpuStretch
+    [void](Set-GameCompatFlags (Find-ValorantExe))
 
     foreach ($d in [VSDisplay4]::Displays()) {
         $hz = [VSDisplay4]::MaxHz($d, $Width, $Height)
@@ -429,6 +509,12 @@ function Invoke-Launch {
         }
         if (-not $game) { Write-Warn2 'Valorant did not start in time.'; return }
         Start-Sleep -Seconds 5   # let it finish creating its window
+
+        # First run on a new install path: the flags only apply from the next game start.
+        try { $exePath = $game.Path } catch { $exePath = $null }
+        if ($exePath -and (Set-GameCompatFlags $exePath)) {
+            Write-Warn2 'Valorant needs one restart for the black-bar fix: close the game, then run Play-Stretched again.'
+        }
 
         Write-Ok 'Valorant is up - leave this window open while you play.'
         Write-Host '    (Your normal resolution comes back automatically when you close the game.)' -ForegroundColor Gray
@@ -526,6 +612,7 @@ function Invoke-Revert {
     } else {
         Write-Warn2 'No scaling backup found - display scaling left unchanged.'
     }
+    Remove-GameCompatFlags
     Enable-MonitorDrivers
     foreach ($d in [VSDisplay4]::Displays()) { [void][VSDisplay4]::Restore($d) }
     Write-Ok 'Done. Restart your PC to be 100% back to normal.'

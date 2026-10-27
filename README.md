@@ -34,6 +34,7 @@ irm https://raw.githubusercontent.com/Youssef-Hawary/hawary-valorant-stretch-scr
 
 - **Valorant config** - every `GameUserSettings.ini` under `%LOCALAPPDATA%\VALORANT\Saved\Config` gets your resolution, Windowed Fullscreen mode, Aspect Ratio Method = Fill (Valorant's exclusive Fullscreen always resets to native; Windowed Fullscreen follows the stretched desktop - same setup SnapRes uses). The files are set **read-only** so Riot can't reset them. A `.stretch-backup` copy is kept next to each.
   - Because the files are read-only, other video settings you change in-game won't save. Run `-Revert`, change them, then apply again.
+- **Fullscreen optimizations** - turned off for `VALORANT-Win64-Shipping.exe` (same as *Properties > Compatibility > Disable fullscreen optimizations*, plus Windows 11's *Optimizations for windowed games*). Without this, the bars come back as soon as you click into the game. `-Revert` puts it back.
 - **Display scaling** - the Windows display configuration (`HKLM\...\GraphicsDrivers\Configuration\...\Scaling`) is set to *Stretched*. Original values are saved in `%LOCALAPPDATA%\ValorantStretch` for revert.
 - **Launch mode** only changes the resolution temporarily; nothing about your desktop is saved.
 

@@ -40,7 +40,7 @@ irm https://raw.githubusercontent.com/Youssef-Hawary/hawary-valorant-stretch-scr
 
 ## Still seeing black bars?
 
-**Valorant now letterboxes anything narrower than about 1.45 (width / height).** 4:3 resolutions like 1280x960 (1.33) always get bars top + bottom from the game itself. Current "true stretched" guides use 1.45 instead: **1280x882**, **1440x993**, **1568x1080**, **1920x1324**. The script offers the no-bars version automatically when you type a 4:3 one. Create it first in NVIDIA Control Panel: *Change resolution > Customize > tick "Enable resolutions not exposed by the display" > Create Custom Resolution*. In-game, click *Letterbox > Apply*, then *Fill > Apply*.
+**Bars on top + bottom at 4:3 (1280x960):** Valorant letterboxes a stretched resolution under ~1.45 width/height if it's the *first* one it sees. The launcher handles this automatically: it switches to a 1.45 "primer" resolution first (**1280x880** for 1280x960), waits a few seconds so the game goes into Fill, then switches to your resolution. Create the primer once in NVIDIA Control Panel: *Change resolution > Customize > tick "Enable resolutions not exposed by the display" > Create Custom Resolution > 1280 x 880* (and 1280 x 960).
 
 **Bars on top and bottom** = Valorant's own Letterbox is still on (it's synced to your Riot account and can override the config). Run the script, pick **4) One-time Fill setup**, and follow the on-screen steps once. After that just use `Play-Stretched.bat`.
 

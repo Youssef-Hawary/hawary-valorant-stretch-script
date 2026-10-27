@@ -487,6 +487,42 @@ function Enable-MonitorDrivers {
     Write-Ok "Monitor driver(s) re-enabled in Device Manager."
 }
 
+# Valorant adds black bars top + bottom if a stretched resolution under ~1.45
+# (e.g. 4:3) is the FIRST one it sees. Going to a 1.45 resolution first
+# (1280x880 for 1280x960), letting the game switch to Fill, then to the real one
+# keeps it filled - the method from the "COMPLETE True Stretched" guide.
+function Get-PrimerMode($dev) {
+    if (($Width / $Height) -ge 1.44) { return $null }
+    $ideal = [math]::Floor($Width / 1.45)
+    foreach ($h in @($ideal, 880, ($ideal - 1), ($ideal + 1), ($ideal - 2), ($ideal + 2)) | Select-Object -Unique) {
+        $hz = [VSDisplay4]::MaxHz($dev, $Width, $h)
+        if ($hz -gt 0) { return @($Width, $h, $hz) }
+    }
+    return @($Width, $ideal, 0)   # not in the mode list - we'll still try it
+}
+
+function Set-StretchedWithPrimer($dev, $hz) {
+    $p = Get-PrimerMode $dev
+    if ($p) {
+        $r = [VSDisplay4]::SetStretched($dev, $p[0], $p[1], $p[2])
+        if ($r -eq 0) {
+            Write-Step "Primer: $($p[0])x$($p[1]) for a few seconds so Valorant switches to Fill..."
+            [void][VSDisplay4]::ForceStretchScaling()
+            $deadline = (Get-Date).AddSeconds(4)
+            while ((Get-Date) -lt $deadline) {
+                $c = [VSDisplay4]::Current($dev)
+                [void][VSDisplay4]::FitWindow([VSDisplay4]::GameWindow(), $c[0], $c[1], $c[2], $c[3])
+                Start-Sleep -Milliseconds 500
+            }
+        } elseif (-not $script:primerWarned) {
+            $script:primerWarned = $true
+            Write-Warn2 "Couldn't use primer $($p[0])x$($p[1]) (code $r). Create it in NVIDIA Control Panel as a custom resolution"
+            Write-Warn2 '(tick "Enable resolutions not exposed by the display") - otherwise you may get bars top + bottom.'
+        }
+    }
+    return [VSDisplay4]::SetStretched($dev, $Width, $Height, $hz)
+}
+
 function Invoke-SetupFill {
     if (Test-Path $LastResFile) {
         $saved = (Get-Content $LastResFile -Raw).Trim()
@@ -594,7 +630,7 @@ function Invoke-Launch {
 
             $cur = [VSDisplay4]::Current($activeDev)
             if ($forceDesktop -and ($cur[2] -ne $Width -or $cur[3] -ne $Height -or ($hz -gt 0 -and $cur[4] -ne $hz))) {
-                $r = [VSDisplay4]::SetStretched($activeDev, $Width, $Height, $hz)
+                $r = Set-StretchedWithPrimer $activeDev $hz
                 if ($r -eq 0) {
                     if (-not $changedDevs.Contains($activeDev)) { $changedDevs.Add($activeDev) }
                     $needScale = $true
@@ -667,12 +703,12 @@ $LastResFile = Join-Path $StateDir 'last-resolution.txt'
 
 function Read-Resolution {
     # Default = last resolution you used, otherwise 1280x960.
-    $def = '1280x882'
+    $def = '1280x960'
     if (Test-Path $LastResFile) {
         $saved = (Get-Content $LastResFile -Raw).Trim()
         if ($saved -match '^\d+x\d+$') { $def = $saved }
     }
-    $presets = @('1280x882', '1440x993', '1568x1080', '1280x960', '1440x1080', '1024x768')
+    $presets = @('1280x960', '1440x1080', '1024x768', '1280x880', '1440x993', '1568x1080')
     $mons    = [VSDisplay4]::Displays()
     $sizes   = @($mons | ForEach-Object { $c = [VSDisplay4]::Current($_); "$($c[2])x$($c[3])@$($c[4])Hz" })
     $maxW    = ($mons | ForEach-Object { ([VSDisplay4]::Current($_))[2] } | Measure-Object -Maximum).Maximum
@@ -697,14 +733,10 @@ function Read-Resolution {
             $w = [int]$Matches[1]; $h = [int]$Matches[2]
             if ($w -lt 640 -or $h -lt 480) { Write-Bad 'Too small - minimum is 640x480.'; continue }
             if ($w -gt $maxW -or $h -gt $maxH) { Write-Bad "Bigger than your monitor (${maxW}x${maxH}) - nothing to stretch."; continue }
-            # Valorant adds its own bars top + bottom when width/height is under ~1.45
-            # (4:3 is 1.33). The "true stretched" resolutions everyone uses now sit at 1.45.
+            # Under ~1.45 width/height (4:3 is 1.33) Valorant letterboxes if it STARTS there.
+            # The launcher handles that by going through a 1.45 'primer' resolution first.
             if (($w / $h) -lt 1.44) {
-                $h2 = [math]::Floor($w / 1.45)
-                Write-Warn2 "Valorant puts black bars top + bottom on ${w}x${h} (ratio under 1.45)."
-                Write-Warn2 "The no-bars version of it is ${w}x${h2}."
-                $ans = (Read-Host "  Use ${w}x${h2} instead? [Y/n]").Trim().ToLower()
-                if ($ans -ne 'n') { $h = $h2 }
+                Write-Host "  ${w}x${h} is under a 1.45 ratio - the launcher will pass through ${w}x$([math]::Floor($w / 1.45)) first so Valorant doesn't add bars." -ForegroundColor DarkGray
             }
             New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
             Set-Content -Path $LastResFile -Value "${w}x${h}"

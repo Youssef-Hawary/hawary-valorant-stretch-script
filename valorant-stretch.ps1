@@ -244,8 +244,14 @@ function Set-IniStretch($file) {
         'FullscreenMode'                       = 1
         'LastConfirmedFullscreenMode'          = 1
         'PreferredFullscreenMode'              = 1
+        # Aspect Ratio Method = Fill (False = Fill, True = Letterbox) - the keys stretch tools like VALORez set.
         'bShouldLetterbox'                     = 'False'
         'bLastConfirmedShouldLetterbox'        = 'False'
+        'bUseDesiredScreenHeight'              = 'False'
+        'LastRecommendedScreenWidth'           = '-1.000000'
+        'LastRecommendedScreenHeight'          = '-1.000000'
+        'WindowPosX'                           = 0
+        'WindowPosY'                           = 0
     }
 
     # Drop any existing copies of these keys, wherever they are.

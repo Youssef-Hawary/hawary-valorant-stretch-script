@@ -8,7 +8,7 @@ One script that puts Valorant on **1280x960 stretched** (full screen, no black b
 
 1. Download this repo (green **Code** button > **Download ZIP**) and unzip it.
 2. Double-click **`ValorantStretch.bat`** and accept the admin prompt.
-3. Pick **2** (apply + launch stretched) or **1** (apply only, then restart your PC once).
+3. Pick **1**. Every time you play, start Valorant with **`Play-Stretched.bat`** (or option 1) instead of the normal shortcut.
 
 **Option B - one line in PowerShell (run as Administrator)**
 
@@ -24,21 +24,21 @@ irm https://raw.githubusercontent.com/Youssef-Hawary/hawary-valorant-stretch-scr
 |---|---|
 | `valorant-stretch.ps1` | Menu |
 | `valorant-stretch.ps1 -Apply` | Patches Valorant's config + sets GPU scaling to stretch |
-| `valorant-stretch.ps1 -Launch` | Same as Apply, then switches the desktop to 1280x960 at your monitor's max Hz, starts Valorant, and restores your normal resolution when the game closes. `Play-Stretched.bat` does this in one click. |
+| `valorant-stretch.ps1 -Launch` | Applies the config, starts Valorant, then keeps the screen at 1280x960 stretched (max Hz) and the game window borderless full screen. If Valorant snaps back to native, it's switched back within ~2 seconds. Your normal resolution returns when the game closes. `Play-Stretched.bat` does this in one click. |
 | `valorant-stretch.ps1 -Revert` | Restores the original config files and scaling |
 | `-Width 1440 -Height 1080` | Any other stretched resolution |
 
 ## What it changes
 
-- **Valorant config** - every `GameUserSettings.ini` under `%LOCALAPPDATA%\VALORANT\Saved\Config` gets 1280x960, Fullscreen mode, letterbox off. The files are set **read-only** so Riot can't reset them. A `.stretch-backup` copy is kept next to each.
+- **Valorant config** - every `GameUserSettings.ini` under `%LOCALAPPDATA%\VALORANT\Saved\Config` gets 1280x960, Windowed mode, letterbox off (Valorant's own Fullscreen mode always resets to native, so the launcher runs it windowed and makes the window borderless full screen - same as the WinEXP method). The files are set **read-only** so Riot can't reset them. A `.stretch-backup` copy is kept next to each.
   - Because the files are read-only, other video settings you change in-game won't save. Run `-Revert`, change them, then apply again.
 - **Display scaling** - the Windows display configuration (`HKLM\...\GraphicsDrivers\Configuration\...\Scaling`) is set to *Stretched*. Original values are saved in `%LOCALAPPDATA%\ValorantStretch` for revert.
 - **Launch mode** only changes the resolution temporarily; nothing about your desktop is saved.
 
 ## Still seeing black bars?
 
-1. In Valorant: **Settings > Video > General > Display Mode = Fullscreen** (not Windowed Fullscreen).
-2. Restart your PC once after the first apply.
+1. Make sure you started the game with **Play-Stretched.bat** and left its window open.
+2. Restart your PC once after the first run (loads the new display scaling).
 3. **NVIDIA:** Control Panel > *Adjust desktop size and position* > Scaling mode **Full-screen**, Perform scaling on **GPU**, tick **Override the scaling mode set by games and programs** > Apply.
    **AMD:** Adrenalin > Settings > Display > **GPU Scaling: On**, **Scaling Mode: Full panel**.
 4. If the script says 1280x960 isn't in your mode list, add it as a custom resolution (NVIDIA: *Change resolution > Customize > Create Custom Resolution*, use your max refresh rate).

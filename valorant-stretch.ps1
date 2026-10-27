@@ -63,11 +63,11 @@ if (-not $isAdmin) {
 }
 
 # ------------------------------------------------------- display (Win32) ----
-if (-not ('VSDisplay' -as [type])) {
+if (-not ('VSDisplay2' -as [type])) {
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
-public static class VSDisplay {
+public static class VSDisplay2 {
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     public struct DEVMODE {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
@@ -88,7 +88,38 @@ public static class VSDisplay {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern int ChangeDisplaySettingsEx(string dev, IntPtr dm, IntPtr hwnd, int flags, IntPtr lp);
 
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
+    [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int i, int v);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint f);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+
     static DEVMODE New() { DEVMODE d = new DEVMODE(); d.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE)); return d; }
+
+    // Real pixel coordinates even with Windows display scaling (125%, 150%...).
+    public static void DpiAware() { try { SetProcessDPIAware(); } catch { } }
+
+    public static IntPtr GameWindow() { return FindWindow("VALORANTUnrealWindow", null); }
+
+    // Make the Valorant window borderless and exactly cover (0,0)-(w,h).
+    // Returns -1 = no usable window, 0 = already correct, 1 = fixed it.
+    public static int FitWindow(IntPtr h, int w, int hh) {
+        if (h == IntPtr.Zero || !IsWindowVisible(h) || IsIconic(h)) return -1;
+        int s  = GetWindowLong(h, -16);
+        int ns = s & ~(0x00C00000 | 0x00040000 | 0x00080000 | 0x00020000 | 0x00010000); // caption, sizing frame, sysmenu, min/max
+        int ex  = GetWindowLong(h, -20);
+        int nex = ex & ~(0x1 | 0x100 | 0x200 | 0x20000);                                // dialog/window/client/static edges
+        RECT r; GetWindowRect(h, out r);
+        if (ns == s && nex == ex && r.L == 0 && r.T == 0 && r.R == w && r.B == hh) return 0;
+        if (ns != s) SetWindowLong(h, -16, ns);
+        if (nex != ex) SetWindowLong(h, -20, nex);
+        SetWindowPos(h, IntPtr.Zero, 0, 0, w, hh, 0x0020 | 0x0040 | 0x0200); // FRAMECHANGED | SHOWWINDOW | NOOWNERZORDER
+        return 1;
+    }
 
     public static int[] Current() {
         DEVMODE d = New();
@@ -107,9 +138,10 @@ public static class VSDisplay {
     public static int SetStretched(int w, int h, int hz) {
         DEVMODE d = New();
         EnumDisplaySettings(null, -1, ref d);
-        d.dmPelsWidth = w; d.dmPelsHeight = h; d.dmDisplayFrequency = hz; d.dmBitsPerPel = 32;
+        d.dmPelsWidth = w; d.dmPelsHeight = h; d.dmBitsPerPel = 32;
         d.dmDisplayFixedOutput = 1; // DMDFO_STRETCH
-        d.dmFields = 0x80000 | 0x100000 | 0x400000 | 0x40000 | 0x20000000;
+        d.dmFields = 0x80000 | 0x100000 | 0x40000 | 0x20000000;
+        if (hz > 0) { d.dmDisplayFrequency = hz; d.dmFields |= 0x400000; }
         return ChangeDisplaySettingsEx(null, ref d, IntPtr.Zero, 0, IntPtr.Zero);
     }
     // Go back to the resolution saved in Windows settings.
@@ -117,6 +149,7 @@ public static class VSDisplay {
 }
 '@
 }
+[VSDisplay2]::DpiAware()
 
 # -------------------------------------------------------------- helpers ----
 function Stop-Riot {
@@ -161,9 +194,10 @@ function Set-IniStretch($file) {
         'DesiredScreenHeight'                  = $Height
         'LastUserConfirmedDesiredScreenWidth'  = $Width
         'LastUserConfirmedDesiredScreenHeight' = $Height
-        'FullscreenMode'                       = 0      # 0 = Fullscreen (needed for stretch)
-        'LastConfirmedFullscreenMode'          = 0
-        'PreferredFullscreenMode'              = 0
+        # 2 = Windowed. Valorant's Fullscreen always snaps back to native res, so the
+        # launcher runs the game windowed and makes that window borderless + full screen.
+        'FullscreenMode'                       = 2
+        'LastConfirmedFullscreenMode'          = 2
         'bShouldLetterbox'                     = 'False'
         'bLastConfirmedShouldLetterbox'        = 'False'
     }
@@ -228,7 +262,7 @@ function Invoke-Apply {
 
     Set-GpuStretch
 
-    $hz = [VSDisplay]::MaxHz($Width, $Height)
+    $hz = [VSDisplay2]::MaxHz($Width, $Height)
     if ($hz -gt 0) {
         Write-Ok "Your monitor supports ${Width}x${Height} up to ${hz}Hz."
     } else {
@@ -259,36 +293,64 @@ function Invoke-Launch {
     if (-not (Invoke-Apply)) { return }
 
     $riot = Find-RiotClient
-    if (-not $riot) { Write-Bad 'Could not find RiotClientServices.exe. Start Valorant yourself - the config is already stretched.'; return }
+    if (-not $riot) { Write-Bad 'Could not find RiotClientServices.exe - is Valorant installed?'; return }
 
-    $hz = [VSDisplay]::MaxHz($Width, $Height)
-    $orig = [VSDisplay]::Current()
+    $hz   = [VSDisplay2]::MaxHz($Width, $Height)
+    $orig = [VSDisplay2]::Current()
+    $hzText = if ($hz -gt 0) { "${hz}Hz" } else { 'default Hz' }
     $changed = $false
     try {
-        if ($hz -gt 0) {
-            $r = [VSDisplay]::SetStretched($Width, $Height, $hz)
-            if ($r -eq 0) { $changed = $true; Write-Ok "Desktop switched to ${Width}x${Height} @ ${hz}Hz (stretched)." }
-            else { Write-Warn2 "Could not switch desktop resolution (code $r). Launching anyway." }
-        }
-
+        # Launch at native resolution first (Valorant resets the screen while it starts up).
         Write-Step 'Launching Valorant...'
         Start-Process -FilePath $riot -ArgumentList '--launch-product=valorant', '--launch-patchline=live'
 
-        Write-Step 'Waiting for the game to start (up to 10 minutes)...'
+        Write-Step 'Waiting for the game window (up to 10 minutes)...'
         $deadline = (Get-Date).AddMinutes(10)
         $game = $null
-        while (-not $game -and (Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds 3
+        while ((Get-Date) -lt $deadline) {
             $game = Get-Process -Name 'VALORANT-Win64-Shipping' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($game -and [VSDisplay2]::GameWindow() -ne [IntPtr]::Zero) { break }
+            Start-Sleep -Seconds 2
         }
         if (-not $game) { Write-Warn2 'Valorant did not start in time.'; return }
+        Start-Sleep -Seconds 5   # let it finish creating its window
 
-        Write-Ok 'Valorant is running. Leave this window open - your normal resolution comes back when the game closes.'
-        $game.WaitForExit()
+        Write-Ok "Valorant is up. Keeping it at ${Width}x${Height} stretched - leave this window open."
+        Write-Host '    (Your normal resolution comes back automatically when you close the game.)' -ForegroundColor Gray
+
+        # Watchdog: whenever Valorant (or anything) puts the screen back to native,
+        # switch it to WxH again and refit the game window to cover the whole screen.
+        $resets = New-Object System.Collections.Generic.Queue[datetime]
+        $forceDesktop = $true
+        $announced = $false
+        while (-not $game.HasExited) {
+            $cur = [VSDisplay2]::Current()
+            if ($forceDesktop -and ($cur[0] -ne $Width -or $cur[1] -ne $Height)) {
+                $r = [VSDisplay2]::SetStretched($Width, $Height, $hz)
+                if ($r -eq 0) {
+                    $changed = $true
+                    $now = Get-Date
+                    $resets.Enqueue($now)
+                    while ($resets.Count -gt 0 -and ($now - $resets.Peek()).TotalSeconds -gt 60) { [void]$resets.Dequeue() }
+                    if (-not $announced) { Write-Ok "Screen set to ${Width}x${Height} @ $hzText (stretched)."; $announced = $true }
+                    if ($resets.Count -ge 6) {
+                        $forceDesktop = $false
+                        Write-Bad 'Valorant keeps switching back to native - it is probably in Fullscreen mode.'
+                        Write-Bad 'Close the game, run Revert, set Display Mode = Windowed in Valorant, then run this again.'
+                    }
+                } else {
+                    $forceDesktop = $false
+                    Write-Bad "Windows refused ${Width}x${Height} (code $r). Add it as a custom resolution in your GPU panel (see README)."
+                }
+            }
+            [void][VSDisplay2]::FitWindow([VSDisplay2]::GameWindow(), $Width, $Height)
+            Start-Sleep -Milliseconds 1500
+        }
+        Write-Step 'Valorant closed.'
     }
     finally {
         if ($changed) {
-            [void][VSDisplay]::Restore()
+            [void][VSDisplay2]::Restore()
             Write-Ok "Desktop restored to $($orig[0])x$($orig[1]) @ $($orig[2])Hz."
         }
     }
@@ -320,7 +382,7 @@ function Invoke-Revert {
     } else {
         Write-Warn2 'No scaling backup found - display scaling left unchanged.'
     }
-    [void][VSDisplay]::Restore()
+    [void][VSDisplay2]::Restore()
     Write-Ok 'Done. Restart your PC to be 100% back to normal.'
 }
 
@@ -330,13 +392,13 @@ Write-Host "  VALORANT STRETCHED  ${Width}x${Height}" -ForegroundColor Magenta
 Write-Host '  ----------------------------------' -ForegroundColor DarkGray
 
 if (-not ($Apply -or $Launch -or $Revert)) {
-    Write-Host '  1) Apply stretch (config + GPU scaling)'
-    Write-Host '  2) Apply + launch Valorant stretched (best - auto restores your resolution)'
+    Write-Host '  1) Play Valorant stretched  (use this every time you play)'
+    Write-Host '  2) Only patch the config + GPU scaling'
     Write-Host '  3) Revert everything'
     Write-Host ''
     switch (Read-Host '  Choose 1, 2 or 3') {
-        '1' { $Apply = $true }
-        '2' { $Launch = $true }
+        '1' { $Launch = $true }
+        '2' { $Apply = $true }
         '3' { $Revert = $true }
         default { Write-Bad 'Nothing selected.'; return }
     }
@@ -348,8 +410,8 @@ try {
     else {
         if (Invoke-Apply) {
             Write-Host ''
-            Write-Ok 'Done. Restart your PC once (so the new scaling loads), then open Valorant.'
-            Write-Host '    In-game: Video > Display Mode must stay on Fullscreen.' -ForegroundColor Gray
+            Write-Ok 'Config patched. To actually play stretched, start the game with Play-Stretched.bat'
+            Write-Host '    (or option 1) - Valorant resets the screen to native if you open it normally.' -ForegroundColor Gray
         }
     }
 }
